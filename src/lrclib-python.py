@@ -155,7 +155,7 @@ class Song:
         return matches >= 3
 
 
-class LrcLibClient:
+class LrclibClient:
     def __init__(
         self,
         user_agent: str = "lrclib-python/1.1b",
