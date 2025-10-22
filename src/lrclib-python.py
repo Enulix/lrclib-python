@@ -1,204 +1,371 @@
 from hashlib import sha256
+import threading
 import requests
+import time
 
-# Custom exception
+
 class LrcLibError(Exception):
+    """Base exception for all the other exceptions"""
+
     pass
 
-# info class, would use dataclass but too lazy to learn
+
+class InvalidArguments(LrcLibError):
+    """Arguments are invalid"""
+
+    pass
+
+
+class NotFound(LrcLibError):
+    """Song was not found"""
+
+    pass
+
+
+class RateLimited(LrcLibError):
+    """Exceeded API's rate limit"""
+
+    pass
+
+
+class Instrumental(LrcLibError):
+    """Song is instrumental and has no lyrics"""
+
+    pass
+
+
+class IncorrectToken(LrcLibError):
+    """Token was rejected by the API"""
+
+    pass
+
+
+class BadRequest(LrcLibError):
+    """Request was rejected"""
+
+    pass
+
+
+class ChallengeTimeout(LrcLibError):
+    """Solver took too long, prefix and target are expired"""
+
+    pass
+
+
+def solve_challenge(prefix: str, target: str, timeout: int = 300) -> str:
+    """
+    Solve the nonce challenge fom the challenge endpoint
+
+    Args:
+        prefix: Prefix given by endpoint (str)
+        target: Target given by endpoint (str)
+        timeout: Timeout in seconds (int)
+
+    Returns:
+        Token (str)
+
+    Raises:
+        ChallengeTimeout: Solve took too long
+    """
+    target_int = int(target, 16)
+    prefix_bytes = prefix.encode()
+    start = time.monotonic()
+    nonce = 0
+
+    while time.monotonic() - start < timeout:
+        candidate = prefix_bytes + str(nonce).encode()
+        if int.from_bytes(sha256(candidate).digest(), "big") <= target_int:
+            return f"{prefix}:{nonce}"
+        nonce += 1
+
+    raise ChallengeTimeout(
+        f"Solver timeout after {round(time.monotonic() - start, 2)}s"
+    )
+
+
 class Song:
     def __init__(self, response):
-        self.song_id = response.get('id')
-        self.track_name = response.get('trackName')
-        self.artist_name = response.get('artistName')
-        self.album_name = response.get('albumName')
-        self.duration = response.get('duration')
-        self.instrumental = response.get('instrumental')
-        self.plain_lyrics = response.get('plainLyrics') 
-        self.synced_lyrics = response.get('syncedLyrics')
+        self.song_id = response.get("id")
+        self.track_name = response.get("trackName")
+        self.artist_name = response.get("artistName")
+        self.album_name = response.get("albumName")
+        self.duration = response.get("duration")
+        self.instrumental = response.get("instrumental")
+        self._plain_lyrics = response.get("plainLyrics")
+        self._synced_lyrics = response.get("syncedLyrics")
+        self.lyrics = self._synced_lyrics or self._plain_lyrics
+
+    @property
+    def status(self):
+        if self.instrumental:
+            return "Instrumental"
+        elif self.synced_lyrics:
+            return "Synced"
+        elif self.plain_lyrics:
+            return "Plain"
+
+    @property
+    def plain_lyrics(self):
+        if not self.instrumental:
+            return self._plain_lyrics
+        else:
+            raise Instrumental(f"{self.track_name} Is an instrumental with no lyrics")
+
+    @plain_lyrics.setter
+    def plain_lyrics(self, value):
+        self._plain_lyrics = value
+
+    @property
+    def synced_lyrics(self):
+        if not self.instrumental:
+            return self._synced_lyrics
+        else:
+            raise Instrumental(f"{self.track_name} Is an instrumental with no lyrics")
+
+    @synced_lyrics.setter
+    def synced_lyrics(self, value):
+        self._synced_lyrics = value
 
     def __str__(self):
-        return f"[SONG] {self.track_name} by {self.artist_name}"
+        return f"{self.track_name} by {self.artist_name} ({self.status})"
 
     def __repr__(self):
-        return f"[SONG] {self.track_name} by {self.artist_name}"
+        if self.album_name:
+            return f"[{self.song_id}] {self.track_name} by {self.artist_name} in album {self.album_name} ({self.status})"
+        else:
+            return f"[{self.song_id}] {self.track_name} by {self.artist_name} ({self.status})"
 
-# Main API
-class LrcLibAPI:
-    def __init__(self, user_agent = "lrclib-python/1.1b", base_URL = "https://lrclib.net/api"):
+    def __eq__(self, other):
+        if not isinstance(other, Song):
+            return NotImplemented
 
-        # Setup stuff
+        if self.song_id == other.song_id and (self.song_id and other.song_id):
+            return True
+
+        if isinstance(self.duration, int) and isinstance(other.duration, int):
+            durch = abs(self.duration - other.duration) <= 5
+
+        checks = [
+            self.track_name == other.track_name,
+            self.artist_name == other.artist_name,
+            self.album_name == other.album_name,
+            self.instrumental == other.instrumental,
+        ]
+        matches = sum(1 for check in checks if check) + (1 if durch else 0)
+        return matches >= 3
+
+
+class LrcLibClient:
+    def __init__(
+        self,
+        user_agent: str = "lrclib-python/1.1b",
+        base_url: str = "https://lrclib.net/api",
+    ):
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': user_agent})
-        self.base_URL = base_URL
-        
-    def get(self, track_name:str =None, artist_name:str =None, album_name:str =None, duration: int=None, song_id: int=None, cached: bool = False):
+        self.session.headers.update({"User-Agent": user_agent})
+        self.base_url = base_url
+        self.timeout = 300
+        self._token = None
+        self._tk_time = 0
+        self._tk_lock = threading.Lock()
 
-        # If a song doesnt have an album its its own album
-        if not album_name: album_name = track_name
-        # Yes albums are NEEDED, check the docs
+    def _get_token(self, force=False):
+        with self._tk_lock:
+            if (
+                (not self._token)
+                or ((time.monotonic() - self._tk_time) > self.timeout)
+                or force
+            ):
+                challenge_endpoint = "request-challenge"
+                challenge_request = self.session.post(
+                    f"{self.base_url}/{challenge_endpoint}"
+                )
+                challenge = challenge_request.json()
+                prefix = challenge["prefix"]
+                target = challenge["target"]
+                self._token = solve_challenge(prefix, target, self.timeout)
+                self._tk_time = time.monotonic()
+                return self._token
+            else:
+                return self._token
 
-        # The caching logic
+    def get(
+        self,
+        id_name: int | str,
+        artist_name: str = None,
+        album_name: str = None,
+        duration: int = None,
+        cached: bool = False,
+    ) -> Song:
+        """
+        Get a song directly via the ID or the metadata
+
+        Args:
+            id_name: Song ID (int) or track name (str)
+            artist_name: Name of Artist
+            album_name: Name of Album
+            duration: Duration in seconds (int)
+            cached: Use cached endpoint (bool)
+
+        Returns:
+            Song: Song object with lyrics and metadata
+
+        Raises:
+            InvalidArguments: Unexpected arguments
+            NotFound: Fetching directly failed
+            BadRequest: A bad request was sent
+            RateLimited: Exceeded the API's rate limit
+        """
+
+        song_id = None
+        track_name = None
+        if not (artist_name or album_name or duration):
+            try:
+                song_id = int(id_name)
+            except Exception as e:
+                raise InvalidArguments(f"ID must be an int\n{e}")
+        else:
+            track_name = id_name
+
         endpoint = "get-cached" if cached else "get"
-        url = f"{self.base_URL}/{endpoint}"
+        url = f"{self.base_url}/{endpoint}"
 
-        # Song id shpuld work instantly
         if song_id:
             request = self.session.get(f"{url}/{song_id}")
 
-        # bit of error stuff handling stuff before doing the GET request
-        elif not track_name or not artist_name or not duration:
-            raise LrcLibError("Too little arguments")
         else:
-            request = self.session.get(url, params={
-                'track_name': track_name, 
-                'artist_name': artist_name, 
-                'album_name': album_name, 
-                'duration': duration
-            })
+            request = self.session.get(
+                url,
+                params={
+                    "track_name": track_name,
+                    "artist_name": artist_name,
+                    "album_name": album_name,
+                    "duration": duration,
+                },
+            )
 
-        # Fallback cuz the cache endpoint is unreliable
         if request.status_code == 404 and cached:
-            print("[WARN] Cached endpoint failed, falling back to normal...")
-            endpoint = "get"
-            url = f"{self.base_URL}/{endpoint}"
-            if song_id:
-                request = self.session.get(f"{url}/{song_id}")
-            else:
-                request = self.session.get(url, params={
-                    'track_name': track_name, 
-                    'artist_name': artist_name, 
-                    'album_name': album_name, 
-                    'duration': duration
-                })
-            
-        # Some error handling stuff
-        if request.status_code == 404 and song_id:
-            raise LrcLibError(f"Song id {song_id} was not found {request.content}")
-        elif request.status_code == 404:
-            raise LrcLibError(f"Song {track_name} by {artist_name} was not found")
-        elif request.status_code == 400:
-            raise LrcLibError(f"Bad request: {request.url}")
-        elif request.status_code == 429:
-            raise LrcLibError("Rate limited")
-        request.raise_for_status()
+            return self.get(track_name, artist_name, album_name, duration, cached=False)
 
-        # Hand the song over to the Song class
+        if request.status_code == 404 and song_id:
+            raise NotFound(f"Song id {song_id} was not found {request.text}")
+        elif request.status_code == 404:
+            raise NotFound(f"Song {track_name} by {artist_name} was not found")
+        elif request.status_code == 400:
+            raise BadRequest(f"Bad request: {request.url}")
+        elif request.status_code == 429:
+            raise RateLimited("Exceeded the Lrclib API rate limit")
+        request.raise_for_status()
         return Song(request.json())
 
-    def search(self, query: str= None, track_name:str =None, artist_name: str =None, album_name: str =None):
+    def search(
+        self, track_query: str, artist_name: str = None, album_name: str = None
+    ) -> list:
+        """
+        Search a song either via query or name/artist/album
+
+        Args:
+            track_query: Query (str) or the track title (str)
+            artist_name: Name of the artist (str)
+            album_name: Name of the album (str)
+
+        Returns:
+            list of Song objects
+
+        Raises:
+            BadRequest: A bad request was sent
+            RateLimited: The server rate limited this session
+        """
+
         endpoint = "search"
-        url = f"{self.base_URL}/{endpoint}"
+        url = f"{self.base_url}/{endpoint}"
 
-        # Use query if available
-        if query: 
-            request = self.session.get(url, params={'q': query})
+        if not (artist_name or album_name):
+            query = track_query
+        else:
+            track_name = track_query
+            query = None
 
-            # More error handling
-            if request.status_code == 404:
-                raise LrcLibError(f"{query} was not found")
-            elif request.status_code == 400:
-                raise LrcLibError(f"Bad request: {request.url}")
+        if query:
+            request = self.session.get(url, params={"q": query})
+            if request.status_code == 400:
+                raise BadRequest(f"Bad request: {request.url}")
             elif request.status_code == 429:
-                raise LrcLibError("Rate limited")
+                raise RateLimited("Exceeded the Lrclib API rate limit")
             request.raise_for_status()
-            return self._json_to_songlist(request.json())
-
-        # Track name is mandatory    
+            return [Song(item) for item in request.json()]
         if not track_name:
-            raise LrcLibError("Too little arguments")
-
-        # But its the only mandatory parameter
-        params = {'track_name': track_name}
+            raise InvalidArguments("Too little arguments")
+        params = {"track_name": track_name}
         if artist_name:
-            params.update({'artist_name': artist_name})
+            params.update({"artist_name": artist_name})
         if album_name:
-            params.update({'album_name': album_name})
-        
+            params.update({"album_name": album_name})
         request = self.session.get(url, params=params)
 
-        # Usual error handling block
-        if request.status_code == 404:
-            raise LrcLibError(f"{track_name} was not found")
-        elif request.status_code == 400:
-            raise LrcLibError(f"Bad request: {request.url}")
-        elif request.status_code == 429:
-            raise LrcLibError("Rate limited")
-        request.raise_for_status()
-        return self._json_to_songlist(request.json())
-
-    # Very basic function to make the search results readable
-    def _json_to_songlist(self, results):
-        songs = []
-        for item in results:
-            item = Song(item)
-            songs.append(item)
-        return songs
-
-    # Code to solve nonce challenge and returns token
-    def _solve_challenge(self, prefix: str, target: str):
-        nonce = 0
-        target_bytes = bytes.fromhex(target)
-
-        # This is just a copy of LRCGET's implementation, it works
-        while True:
-            possible_solution = f"{prefix}{nonce}"
-            hash_bytes = sha256(possible_solution.encode('utf-8')).digest()
-            if hash_bytes[:-1] <= target_bytes[:-1]:
-                return f'{prefix}:{nonce}'
-        
-            nonce += 1
-
-    # Upload a song
-    def publish(self, track_name: str, artist_name: str, album_name: str, duration: int, plain_lyrics: str, synced_lyrics: str):
-
-        # Setup stuff
-        endpoint = "publish"
-        challenge_endpoint = "request-challenge"
-
-        # Get the challenge
-        challenge_request = self.session.post(f"{self.base_URL}/{challenge_endpoint}")
-        challenge = challenge_request.json()
-        prefix = challenge['prefix']
-        target = challenge['target']
-
-        # Do the challenge
-        token = self._solve_challenge(prefix, target)
-        print(f"Token: {token}") # Debhg stuff
-        self.session.headers.update({'X-Publish-Token': token})
-
-        # Prepare to do the upload        
-        params = {
-            'trackName': track_name,
-            'artistName': artist_name,
-            'albumName': album_name,
-            'duration': duration,
-            'plainLyrics': plain_lyrics,
-            'syncedLyrics': synced_lyrics
-        }
-
-        # A bjt of debug stuff
-        # Also .json() has a heart attack which is why im doing it like this
-        request = self.session.post(f"{self.base_URL}/{endpoint}", json=params)
-        content = request.content
-        content = content.decode('utf-8')
-        print(content)
-        
-        # Sucess case
-        if request.status_code == 201:
-            print("[INFO]Sucessfully uploaded song")
-            return "Sucess"
-        
         if request.status_code == 400:
-            raise LrcLibError(f"Publish token {token} is incorrect")
-
+            raise BadRequest(f"Bad request: {request.url}")
+        elif request.status_code == 429:
+            raise RateLimited("Exceeded the Lrclib API rate limit")
         request.raise_for_status()
+        return [Song(item) for item in request.json()]
 
-        # If youre still here, something went wrong
-        print("[INFO] Execution shouldnt have gone this far")
-        print("-"*32)
-        print(self.session.header)
-        print(f"POST {request.url}")
-        print(f"Json body params:\n{params}")
-        print(f"-"*32)
-        print(f"Response from endpoint:\nCode:{request.status_code}\nJson:{content}")
+    def publish(self, data: dict, _relo=False) -> bool:
+        """
+        Publishes a song to LrcLib
+
+        Args:
+            A dict containing:
+                track_name: Name of the song (str)
+                artist_name: Name of the artist (str)
+                album_name: Name of the album (str)
+                duration: Duration of the song in seconds (int)
+                plain_lyrics: Lyrics of the song in Plaintext (str)
+                synced_lyrics: Times lyrics of the song in the lrc format (str)
+
+        Returns:
+            True
+
+        raises:
+            IncorrectToken: Token was rejected
+            RateLimited: The server rate limited this session
+        """
+        track_name = data["track_name"]
+        artist_name = data["artist_name"]
+        album_name = data["album_name"]
+        duration = data["duration"]
+        synced_lyrics = data.get("synced_lyrics")
+        plain_lyrics = data.get("plain_lyrics")
+
+        try:
+            duration = int(duration)
+        except Exception:
+            raise InvalidArguments("Duration must be in seconds and an int")
+
+        endpoint = "publish"
+        token = self._get_token(True if _relo else False)
+        headers = {"X-Publish-Token": token}
+        params = {
+            "trackName": track_name,
+            "artistName": artist_name,
+            "albumName": album_name,
+            "duration": duration,
+        }
+        if synced_lyrics:
+            params["syncedLyrics"] = synced_lyrics
+        if plain_lyrics:
+            params["plainLyrics"] = plain_lyrics
+        request = self.session.post(
+            f"{self.base_url}/{endpoint}", json=params, headers=headers
+        )
+
+        if request.status_code == 201:
+            return True
+        if request.status_code == 400:
+            if not _relo:
+                self.publish(data, True)
+            else:
+                raise IncorrectToken(f"Publish token {token} was rejected")
+        if request.status_code == 429:
+            raise RateLimited("Rate Limited")
+        request.raise_for_status()
