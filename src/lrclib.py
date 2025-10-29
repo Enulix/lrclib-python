@@ -369,3 +369,9 @@ class LrclibClient:
         if request.status_code == 429:
             raise RateLimited("Rate Limited")
         request.raise_for_status()
+
+if __name__ == "__main__":
+    print("Basic test")
+    client = LrclibClient()
+    song = client.get(12345)
+    print("Basic test passed") # if we got this far without errors it probably works fine
