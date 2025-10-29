@@ -109,7 +109,9 @@ class Song:
         if not self.instrumental:
             return self._plain_lyrics
         else:
-            raise Instrumental(f"{self.track_name} Is an instrumental with no lyrics")
+            raise Instrumental(
+                f"{self.track_name} Is an instrumental with no lyrics"
+            )
 
     @plain_lyrics.setter
     def plain_lyrics(self, value):
@@ -120,7 +122,9 @@ class Song:
         if not self.instrumental:
             return self._synced_lyrics
         else:
-            raise Instrumental(f"{self.track_name} Is an instrumental with no lyrics")
+            raise Instrumental(
+                f"{self.track_name} Is an instrumental with no lyrics"
+            )
 
     @synced_lyrics.setter
     def synced_lyrics(self, value):
@@ -169,6 +173,12 @@ class LrclibClient:
         self._token = None
         self._tk_time = 0
         self._tk_lock = threading.Lock()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.session.close()
 
     def get_token(self, force=False):
         with self._tk_lock:
