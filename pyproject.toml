@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lrclib-python"
-version = "0.1"
+version = "0.3"
 authors = [{name = "Enulix", email = "kareemoidd@gmail.com"}]
 description = "A pure python client for lrclib"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-    "requests>=2.25.0",
+    "requests",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -18,4 +18,4 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Kareem4040/lrclib-python"
+Homepage = "https://github.com/Enulix/lrclib-python"
