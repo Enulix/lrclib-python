@@ -142,6 +142,7 @@ class Song:
         if self.song_id == other.song_id and (self.song_id and other.song_id):
             return True
 
+        durch = False
         if isinstance(self.duration, int) and isinstance(other.duration, int):
             durch = abs(self.duration - other.duration) <= 5
 
@@ -158,7 +159,7 @@ class Song:
 class LrclibClient:
     def __init__(
         self,
-        user_agent: str = "lrclib-python/0.1",
+        user_agent: str = "lrclib-python/0.3",
         base_url: str = "https://lrclib.net/api",
     ):
         self.session = requests.Session()
@@ -169,7 +170,7 @@ class LrclibClient:
         self._tk_time = 0
         self._tk_lock = threading.Lock()
 
-    def _get_token(self, force=False):
+    def get_token(self, force=False):
         with self._tk_lock:
             if (
                 (not self._token)
@@ -245,7 +246,9 @@ class LrclibClient:
             )
 
         if request.status_code == 404 and cached:
-            return self.get(track_name, artist_name, album_name, duration, cached=False)
+            return self.get(
+                track_name, artist_name, album_name, duration, cached=False
+            )
 
         if request.status_code == 404 and song_id:
             raise NotFound(f"Song id {song_id} was not found {request.text}")
@@ -335,7 +338,7 @@ class LrclibClient:
         album_name = data["album_name"]
         duration = data["duration"]
         synced_lyrics = data.get("synced_lyrics")
-        plain_lyrics = data.get("plain_lyrics")
+        plain_lyrics = data.get("plain")
 
         try:
             duration = int(duration)
@@ -343,7 +346,7 @@ class LrclibClient:
             raise InvalidArguments("Duration must be in seconds and an int")
 
         endpoint = "publish"
-        token = self._get_token(True if _relo else False)
+        token = self.get_token(True if _relo else False)
         headers = {"X-Publish-Token": token}
         params = {
             "trackName": track_name,
@@ -363,15 +366,9 @@ class LrclibClient:
             return True
         if request.status_code == 400:
             if not _relo:
-                self.publish(data, True)
+                return self.publish(data, True)
             else:
                 raise IncorrectToken(f"Publish token {token} was rejected")
         if request.status_code == 429:
             raise RateLimited("Rate Limited")
         request.raise_for_status()
-
-if __name__ == "__main__":
-    print("Basic test")
-    client = LrclibClient()
-    song = client.get(12345)
-    print("Basic test passed") # if we got this far without errors it probably works fine
