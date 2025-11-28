@@ -89,7 +89,7 @@ class Song:
         self.instrumental = response.get("instrumental")
         self.plain_lyrics = response.get("plainLyrics")
         self.synced_lyrics = response.get("syncedLyrics")
-        self.lyrics = self._synced_lyrics or self._plain_lyrics
+        self.lyrics = self.synced_lyrics or self.plain_lyrics
 
     @property
     def status(self):
