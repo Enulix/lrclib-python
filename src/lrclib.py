@@ -323,7 +323,7 @@ class LrclibClient:
         album_name = data["album_name"]
         duration = data["duration"]
         synced_lyrics = data.get("synced_lyrics")
-        plain_lyrics = data.get("plain")
+        plain_lyrics = data.get("plain_lyrics")
 
         try:
             duration = int(duration)
