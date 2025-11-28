@@ -28,14 +28,8 @@ class RateLimited(LrcLibError):
     pass
 
 
-class Instrumental(LrcLibError):
-    """Song is instrumental and has no lyrics"""
-
-    pass
-
-
 class IncorrectToken(LrcLibError):
-    """Token was rejected by the API"""
+    """The provided publish token is incorrect"""
 
     pass
 
@@ -52,7 +46,7 @@ class ChallengeTimeout(LrcLibError):
     pass
 
 
-def solve_challenge(prefix: str, target: str, timeout: int = 300) -> str:
+def solve_challenge(prefix: str, target: str, timeout: int = 280) -> str:
     """
     Solve the nonce challenge fom the challenge endpoint
 
@@ -67,15 +61,17 @@ def solve_challenge(prefix: str, target: str, timeout: int = 300) -> str:
     Raises:
         ChallengeTimeout: Solve took too long
     """
-    target_int = int(target, 16)
-    prefix_bytes = prefix.encode()
+    target = int(target, 16).to_bytes(32, "big")
     start = time.monotonic()
+    prefix = prefix.encode()
+    buf = bytearray(prefix)
+    start_len = len(prefix)
     nonce = 0
 
     while time.monotonic() - start < timeout:
-        candidate = prefix_bytes + str(nonce).encode()
-        if int.from_bytes(sha256(candidate).digest(), "big") <= target_int:
-            return f"{prefix}:{nonce}"
+        buf[start_len:] = str(nonce).encode()
+        if sha256(buf).digest() <= target:
+            return f"{prefix.decode()}:{nonce}"
         nonce += 1
 
     raise ChallengeTimeout(
@@ -91,8 +87,8 @@ class Song:
         self.album_name = response.get("albumName")
         self.duration = response.get("duration")
         self.instrumental = response.get("instrumental")
-        self._plain_lyrics = response.get("plainLyrics")
-        self._synced_lyrics = response.get("syncedLyrics")
+        self.plain_lyrics = response.get("plainLyrics")
+        self.synced_lyrics = response.get("syncedLyrics")
         self.lyrics = self._synced_lyrics or self._plain_lyrics
 
     @property
@@ -103,41 +99,17 @@ class Song:
             return "Synced"
         elif self.plain_lyrics:
             return "Plain"
-
-    @property
-    def plain_lyrics(self):
-        if not self.instrumental:
-            return self._plain_lyrics
         else:
-            raise Instrumental(
-                f"{self.track_name} Is an instrumental with no lyrics"
-            )
-
-    @plain_lyrics.setter
-    def plain_lyrics(self, value):
-        self._plain_lyrics = value
-
-    @property
-    def synced_lyrics(self):
-        if not self.instrumental:
-            return self._synced_lyrics
-        else:
-            raise Instrumental(
-                f"{self.track_name} Is an instrumental with no lyrics"
-            )
-
-    @synced_lyrics.setter
-    def synced_lyrics(self, value):
-        self._synced_lyrics = value
+            return "Unknown"
 
     def __str__(self):
         return f"{self.track_name} by {self.artist_name} ({self.status})"
 
     def __repr__(self):
         if self.album_name:
-            return f"[{self.song_id}] {self.track_name} by {self.artist_name} in album {self.album_name} ({self.status})"
+            return f"[{self.song_id}] {self.track_name} by {self.artist_name} in album {self.album_name} ({self.status}) [self.duration]"
         else:
-            return f"[{self.song_id}] {self.track_name} by {self.artist_name} ({self.status})"
+            return f"[{self.song_id}] {self.track_name} by {self.artist_name} ({self.status}){f' [{self.duration}]' if self.duration else ""}"
 
     def __eq__(self, other):
         if not isinstance(other, Song):
@@ -272,7 +244,9 @@ class LrclibClient:
         return Song(request.json())
 
     def search(
-        self, track_query: str, artist_name: str = None, album_name: str = None
+        self, track_query: str, 
+        artist_name: str = None, 
+        album_name: str = None
     ) -> list:
         """
         Search a song either via query or name/artist/album
@@ -309,6 +283,7 @@ class LrclibClient:
             return [Song(item) for item in request.json()]
         if not track_name:
             raise InvalidArguments("Too little arguments")
+
         params = {"track_name": track_name}
         if artist_name:
             params.update({"artist_name": artist_name})
@@ -323,7 +298,7 @@ class LrclibClient:
         request.raise_for_status()
         return [Song(item) for item in request.json()]
 
-    def publish(self, data: dict, _relo=False) -> bool:
+    def publish(self, data: dict) -> bool:
         """
         Publishes a song to LrcLib
 
@@ -356,7 +331,7 @@ class LrclibClient:
             raise InvalidArguments("Duration must be in seconds and an int")
 
         endpoint = "publish"
-        token = self.get_token(True if _relo else False)
+        token = self.get_token()
         headers = {"X-Publish-Token": token}
         params = {
             "trackName": track_name,
@@ -375,9 +350,7 @@ class LrclibClient:
         if request.status_code == 201:
             return True
         if request.status_code == 400:
-            if not _relo:
-                return self.publish(data, True)
-            else:
+            if request.json()['name'] == "IncorrectPublishTokenError":
                 raise IncorrectToken(f"Publish token {token} was rejected")
         if request.status_code == 429:
             raise RateLimited("Rate Limited")
