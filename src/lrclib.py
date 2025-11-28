@@ -135,7 +135,7 @@ class Song:
 class LrclibClient:
     def __init__(
         self,
-        user_agent: str = "lrclib-python/0.3",
+        user_agent: str = "lrclib-python/0.4",
         base_url: str = "https://lrclib.net/api",
     ):
         self.session = requests.Session()
