@@ -1,7 +1,9 @@
-from ../src/lrclib import LrclibClient, Song
+from lrclib import LrclibClient, Song, solve_challenge
 
 # This tests all of lrclib's fucntionality
 client = LrclibClient()
+
+help(solve_challenge)
 
 get_case = client.get(12345)
 if isinstance(get_case, Song) and get_case.synced_lyrics:
