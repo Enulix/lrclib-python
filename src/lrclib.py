@@ -244,8 +244,8 @@ class LrclibClient:
         return Song(request.json())
 
     def search(
-        self, track_query: str, 
-        artist_name: str = None, 
+        self, track_query: str,
+        artist_name: str = None,
         album_name: str = None
     ) -> list:
         """
@@ -351,7 +351,9 @@ class LrclibClient:
             return True
         if request.status_code == 400:
             if request.json()['name'] == "IncorrectPublishTokenError":
+                self._token = None
                 raise IncorrectToken(f"Publish token {token} was rejected")
+            raise BadRequest("Request was rejected")
         if request.status_code == 429:
             raise RateLimited("Rate Limited")
         request.raise_for_status()
