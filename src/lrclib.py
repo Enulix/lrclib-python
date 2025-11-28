@@ -107,7 +107,7 @@ class Song:
 
     def __repr__(self):
         if self.album_name:
-            return f"[{self.song_id}] {self.track_name} by {self.artist_name} in album {self.album_name} ({self.status}) [self.duration]"
+            return f"[{self.song_id}] {self.track_name} by {self.artist_name} in album {self.album_name} ({self.status}){f' [{self.duration}]' if self.duration else ""}"
         else:
             return f"[{self.song_id}] {self.track_name} by {self.artist_name} ({self.status}){f' [{self.duration}]' if self.duration else ""}"
 
