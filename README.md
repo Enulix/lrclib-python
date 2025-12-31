@@ -23,3 +23,4 @@ results = client.search("Blur", "Stellar")
 print(results[0]) # print the first result
 # this can be used in the same way as s was in explaining the .get() method
 ```
+extra docs at [/docs/quickstart.md]
