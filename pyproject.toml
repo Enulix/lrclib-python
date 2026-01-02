@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lrclib-python"
-version = "0.4"
+version = "0.4.2"
 authors = [{name = "Enulix", email = "kareemoidd@gmail.com"}]
 description = "A pure python client for lrclib"
 readme = "README.md"

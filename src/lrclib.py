@@ -3,6 +3,8 @@ import threading
 import requests
 import time
 
+VERSION = "0.4.3"
+
 
 class LrcLibError(Exception):
     """Base exception for all the other exceptions"""
@@ -107,9 +109,9 @@ class Song:
 
     def __repr__(self):
         if self.album_name:
-            return f"[{self.song_id}] {self.track_name} by {self.artist_name} in album {self.album_name} ({self.status}){f' [{self.duration}]' if self.duration else ""}"
+            return f"[{self.song_id}] {self.track_name} by {self.artist_name} in album {self.album_name} ({self.status}){f' [{self.duration}s]' if self.duration else ""}"
         else:
-            return f"[{self.song_id}] {self.track_name} by {self.artist_name} ({self.status}){f' [{self.duration}]' if self.duration else ""}"
+            return f"[{self.song_id}] {self.track_name} by {self.artist_name} ({self.status}){f' [{self.duration}s]' if self.duration else ""}"
 
     def __eq__(self, other):
         if not isinstance(other, Song):
@@ -135,7 +137,7 @@ class Song:
 class LrclibClient:
     def __init__(
         self,
-        user_agent: str = "lrclib-python/0.4",
+        user_agent: str = f"lrclib-python/{VERSION}",
         base_url: str = "https://lrclib.net/api",
     ):
         self.session = requests.Session()
